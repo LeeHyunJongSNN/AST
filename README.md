@@ -1,4 +1,4 @@
-# AST
+# Adatpive Synaptic Template (AST)
 Spiking Neural Networks (SNNs) classifier files with Adaptive Synaptic Template
 
 # Descritption
