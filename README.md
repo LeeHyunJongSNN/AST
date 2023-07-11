@@ -15,3 +15,7 @@ If you need the package and more datasets, please e-mail me.
 hetzer44@naver.com
 Then, I will send the package and datasets.
 For using the package, just put the package into the bindsnet folder in the python library folder (site-packages)
+
+# Type
+snn_wq.py is a Python file for classifying Wine Quality (WQ) dataset.
+snn_digits.py is a Python file for classifying MNIST (8*8 pixels) dataset
