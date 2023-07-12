@@ -16,6 +16,12 @@ hetzer44@naver.com
 Then, I will send the package and datasets.
 For using the package, just put the package into the bindsnet folder in the python library folder (site-packages)
 
-# Type
+# Classifiers
 snn_wq.py is a Python file for classifying Wine Quality (WQ) dataset.
 snn_digits.py is a Python file for classifying MNIST (8*8 pixels) dataset
+
+# Implementation
+We implemented two versions of AST. 
+One is implemented by using conditions and loops. 
+The other is implementde by using pytorch methods.
+They show the same results but they have slightly different operations.
