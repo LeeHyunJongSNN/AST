@@ -223,12 +223,15 @@ n_test = len(test_data)
 num_inputs = train_data[-1]["encoded_image"].shape[1]
 data_size = int(np.shape(normalized)[0] / n_classes)
 exc_size = int(np.sqrt(n_neurons))
+repeat = int(np.ceil(n_neurons / n_classes))
 whole_avg = np.sort(np.mean(normalized, axis=0))
 
 drop_input = []
-drop_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons)))
+drop_mask = torch.ones_like(torch.zeros(num_inputs, n_neurons)).to(device)
 reinforce_input = []
 reinforce_ref = []
+reinforce_mask = torch.zeros_like(torch.zeros(num_inputs, n_neurons)).to(device)
+
 
 if ST:
     for i in range(n_classes):
@@ -248,13 +251,17 @@ if ST:
         else:
             reinforce_ref.append([])
 
-    drop_input *= int(np.ceil(n_neurons / n_classes))
-    reinforce_input *= int(np.ceil(n_neurons / n_classes))
-    reinforce_ref *= int(np.ceil(n_neurons / n_classes))
+    drop_input *= repeat
+    reinforce_input *= repeat
+    reinforce_ref *= repeat
 
     for i in range(n_neurons):
         for j in drop_input[i]:
             drop_mask[j][i] = 0
+
+    for i in range(n_neurons):
+        for j in reinforce_input[i]:
+            reinforce_mask[j][i] = reinforce_ref[i][int(np.where(j == reinforce_input[i])[0])]
 
 print(n_train, n_test, n_classes)
 
@@ -435,7 +442,8 @@ for epoch in range(n_epochs):
         network.run(inputs=inputs, time=time, input_time_dim=1, s_record=s_record, t_record=t_record,
                     simulation_time=time, rand_gmax=rand_gmax, rand_gmin=rand_gmin, random_G=random_G,
                     vLTP=vLTP, vLTD=vLTD, beta=beta, n_neurons=n_neurons, ST=ST, Pruning=Pruning,
-                    drop_mask=drop_mask, reinforce_index_input=reinforce_input, reinforce_ref=reinforce_ref,
+                    drop_mask=drop_mask, # reinforce_mask=reinforce_mask,
+                    reinforce_input=reinforce_input, reinforce_ref=reinforce_ref,
                     fault_type=FT, dead_mask=dead_mask)
 
         # Get voltage recording.
@@ -504,7 +512,8 @@ for step, batch in enumerate(test_data):
     network.run(inputs=inputs, time=time, input_time_dim=1, s_record=s_record, t_record=t_record,
                 simulation_time=time, rand_gmax=rand_gmax, rand_gmin=rand_gmin, random_G=random_G,
                 vLTP=vLTP, vLTD=vLTD, beta=beta, n_neurons=n_neurons, ST=ST, Pruning=Pruning,
-                drop_mask=drop_mask, reinforce_index_input=reinforce_input, reinforce_ref=reinforce_ref,
+                drop_mask=drop_mask, # reinforce_mask=reinforce_mask,
+                reinforce_input=reinforce_input, reinforce_ref=reinforce_ref,
                 fault_type=FT, dead_mask=dead_mask)
 
     # Add to spikes recording.
