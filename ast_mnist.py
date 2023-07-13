@@ -10,6 +10,7 @@ from torchvision import transforms
 from tqdm import tqdm
 
 from keras.datasets import mnist
+from sklearn.preprocessing import minmax_scale
 
 from bindsnet.analysis.plotting import (
     plot_assignments,
@@ -40,10 +41,9 @@ parser.add_argument("--inh", type=float, default=120)
 parser.add_argument("--theta_plus", type=float, default=0.05)
 parser.add_argument("--time", type=int, default=300)
 parser.add_argument("--dt", type=int, default=1.0)
-parser.add_argument("--intensity", type=float, default=128)
+parser.add_argument("--intensity", type=float, default=256)
 parser.add_argument("--progress_interval", type=int, default=10)
 parser.add_argument("--update_interval", type=int, default=10)
-parser.add_argument("--train", dest="train", action="store_true")
 parser.add_argument("--ST", type=bool, default=True)
 parser.add_argument("--AST", type=bool, default=True)
 parser.add_argument("--drop_num", type=int, default=100)
@@ -54,7 +54,7 @@ parser.add_argument("--FS_exc_num", type=int, default=0)
 parser.add_argument("--plot", dest="plot", action="store_true")
 parser.add_argument("--gpu", dest="gpu", action="store_true")
 parser.add_argument("--spare_gpu", dest="spare_gpu", default=0)
-parser.set_defaults(plot=False, gpu=True)
+parser.set_defaults(plot=True, gpu=True)
 
 args = parser.parse_args()
 
@@ -72,7 +72,6 @@ dt = args.dt
 intensity = args.intensity
 progress_interval = args.progress_interval
 update_interval = args.update_interval
-train = args.train
 ST = args.ST
 AST = args.AST
 drop_num = args.drop_num
@@ -108,9 +107,6 @@ if n_workers == -1:
     n_workers = gpu * 4 * torch.cuda.device_count()
 
 print(n_workers, os.cpu_count() - 1)
-
-if not train:
-    update_interval = n_test
 
 n_sqrt = int(np.ceil(np.sqrt(n_neurons)))
 num_inputs = 784
@@ -172,15 +168,15 @@ if ST:
         pre_average.append(np.mean(preprocessed[i * pre_size:(i + 1) * pre_size], axis=0))
 
         if AST:
-            drop_num = len(np.where(pre_average[i] <= entire[int(num_inputs * 0.3) - 1])[0])
-            reinforce_num = len(np.where(pre_average[i] >= entire[int(num_inputs) - 1])[0])
+            drop_num = len(np.where(pre_average[i] <= entire[int(num_inputs * 0.5) - 1])[0])
+            reinforce_num = len(np.where(pre_average[i] >= entire[int(num_inputs * 0.9) - 1])[0])
 
         drop_input.append(np.argwhere(pre_average[i] < np.sort(pre_average[i])[0:drop_num + 1][-1]).flatten())
         reinforce_input.append(
             np.argwhere(pre_average[i] > np.sort(pre_average[i])[0:num_inputs - reinforce_num][-1]).flatten())
         if reinforce_num != 0:
             values = np.sort(pre_average[i])[::-1][:reinforce_num]
-            reinforce_ref.append(values / np.max(values))
+            reinforce_ref.append(minmax_scale(values, feature_range=(0.9, 1.0)))
         else:
             reinforce_ref.append([])
 
@@ -276,6 +272,7 @@ else:
 # Train the network.
 print("\nBegin training.\n")
 start = t()
+print("check accuracy per", update_interval)
 for epoch in range(n_epochs):
     labels = []
 
@@ -471,8 +468,8 @@ for step, batch in enumerate(test_dataset):
     pbar.set_description_str("Test progress: ")
     pbar.update()
 
-print("\nAll activity accuracy: %.2f" % (accuracy["all"] / n_test))
-print("Proportion weighting accuracy: %.2f \n" % (accuracy["proportion"] / n_test))
+print("\nAll activity accuracy: %.2f" % (accuracy["all"] / n_test * 100))
+print("Proportion weighting accuracy: %.2f \n" % (accuracy["proportion"] / n_test * 100))
 
 print("Progress: %d / %d (%.4f seconds)" % (epoch + 1, n_epochs, t() - start))
 print("Testing complete.\n")
