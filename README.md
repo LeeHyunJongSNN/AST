@@ -19,7 +19,9 @@ For using the package, just put the package into the bindsnet folder in the pyth
 # Classifiers
 snn_wq.py is a Python file for classifying Wine Quality (WQ) dataset.
 snn_digits.py is a Python file for classifying MNIST (8x8 pixels) dataset.
-ast_minst.py is a python file for classifying MNIST (28x28 pixels) dataset.
+ast_minst.py is a Python file for classifying MNIST (28x28 pixels) dataset.
+ast_fminst.py is a Python file for classifying Fashion MNIST (28x28 pixels) dataset.
+Python files with batch update synaptic weights using batches.
 
 # Implementation
 We implemented two versions of AST. 
