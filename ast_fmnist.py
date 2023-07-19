@@ -1,120 +1,93 @@
-import os
-import gc
-import torch
 import argparse
 import random
-import numpy as np
+import os
+from time import time as t
+
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
-
+import numpy as np
+import torch
+from torchvision import transforms
 from tqdm import tqdm
-from time import time as t
-from sklearn.datasets import load_wine
-from sklearn.model_selection import train_test_split
+
+from keras.datasets import fashion_mnist
 from sklearn.preprocessing import minmax_scale
 
-from bindsnet.encoding import PoissonEncoder, RankOrderEncoder, BernoulliEncoder, RepeatEncoder
-from bindsnet.memstdp import RankOrderTTFSEncoder, RankOrderTTASEncoder
-from bindsnet.memstdp.MemSTDP_models import AdaptiveIFNetwork_MemSTDP, DiehlAndCook2015_MemSTDP, KISTnetwork_MemSTDP
-from bindsnet.memstdp.MemSTDP_learning import MemristiveSTDP_TimeProportion, PostPre, Thresh_PostPre
+from bindsnet.analysis.plotting import (
+    plot_assignments,
+    plot_input,
+    plot_performance,
+    plot_spikes,
+    plot_voltages,
+    plot_weights,
+)
+from bindsnet.datasets import FashionMNIST
+from bindsnet.encoding import PoissonEncoder
+from bindsnet.evaluation import all_activity, assign_labels, proportion_weighting
+from bindsnet.memstdp.MemSTDP_models import DiehlAndCook2015_MemSTDP
+from bindsnet.memstdp.MemSTDP_learning import PostPre, Thresh_PostPre
 from bindsnet.network.monitors import Monitor
 from bindsnet.utils import get_square_assignments, get_square_weights
-from bindsnet.evaluation import (
-    all_activity,
-    proportion_weighting,
-    assign_labels,
-)
-from bindsnet.analysis.plotting import (
-    plot_input,
-    plot_spikes,
-    plot_assignments,
-    plot_weights,
-    plot_performance,
-    plot_voltages,
-)
 from bindsnet.memstdp.plotting_weights_counts import hist_weights
 
-random_seed = random.randint(0, 100)
 parser = argparse.ArgumentParser()
-
-parser.add_argument("--seed", type=int, default=random_seed)
-parser.add_argument("--n_neurons", type=int, default=25)
-parser.add_argument("--n_epochs", type=int, default=2)
+parser.add_argument("--seed", type=int, default=0)
+parser.add_argument("--n_neurons", type=int, default=400)
+parser.add_argument("--n_epochs", type=int, default=1)
+parser.add_argument("--n_test", type=int, default=10000)
+parser.add_argument("--n_train", type=int, default=60000)
 parser.add_argument("--n_workers", type=int, default=-1)
 parser.add_argument("--exc", type=float, default=22.5)
-parser.add_argument("--inh", type=float, default=17.5)
-parser.add_argument("--rest", type=float, default=-65.0)
-parser.add_argument("--reset", type=float, default=-60.0)
-parser.add_argument("--thresh", type=float, default=-52.0)
-parser.add_argument("--theta_plus", type=float, default=0.01)
-parser.add_argument("--time", type=int, default=500)
+parser.add_argument("--inh", type=float, default=120)
+parser.add_argument("--theta_plus", type=float, default=0.05)
+parser.add_argument("--time", type=int, default=250)
 parser.add_argument("--dt", type=int, default=1.0)
-parser.add_argument("--intensity", type=float, default=200.0)
-parser.add_argument("--weight_scale", type=float, default=2.0)
-parser.add_argument("--encoder_type", dest="encoder_type", default="PoissonEncoder")
+parser.add_argument("--intensity", type=float, default=128)
 parser.add_argument("--progress_interval", type=int, default=10)
-parser.add_argument("--update_interval", type=int, default=10)
-parser.add_argument("--test_ratio", type=float, default=0.5)
-parser.add_argument("--random_G", type=bool, default=False)
-parser.add_argument("--vLTP", type=float, default=0.0)
-parser.add_argument("--vLTD", type=float, default=0.0)
-parser.add_argument("--beta", type=float, default=1.0)
+parser.add_argument("--update_interval", type=int, default=100)
 parser.add_argument("--ST", type=bool, default=True)
 parser.add_argument("--AST", type=bool, default=True)
-parser.add_argument("--drop_num", type=int, default=2)
-parser.add_argument("--reinforce_num", type=int, default=2)
+parser.add_argument("--drop_num", type=int, default=320)
+parser.add_argument("--reinforce_num", type=int, default=25)
 parser.add_argument("--FT", dest="fault_type", default=None)
-parser.add_argument("--FS_input_num", type=int, default=5)
-parser.add_argument("--FS_exc_num", type=int, default=25)
+parser.add_argument("--FS_input_num", type=int, default=0)
+parser.add_argument("--FS_exc_num", type=int, default=0)
 parser.add_argument("--Pruning", type=bool, default=False)
-parser.add_argument("--Noise", type=bool, default=False)
+parser.add_argument("--plot", dest="plot", action="store_true")
 parser.add_argument("--gpu", dest="gpu", action="store_true")
 parser.add_argument("--spare_gpu", dest="spare_gpu", default=0)
-parser.set_defaults(train_plot=True, test_plot=False, gpu=False)
+parser.set_defaults(plot=False, gpu=True)
 
 args = parser.parse_args()
 
 seed = args.seed
 n_neurons = args.n_neurons
 n_epochs = args.n_epochs
+n_test = args.n_test
+n_train = args.n_train
 n_workers = args.n_workers
 exc = args.exc
 inh = args.inh
-rest = args.rest
-reset = args.reset
-thresh = args.thresh
 theta_plus = args.theta_plus
 time = args.time
 dt = args.dt
 intensity = args.intensity
-weight_scale = args.weight_scale
-encoder_type = args.encoder_type
 progress_interval = args.progress_interval
 update_interval = args.update_interval
-test_ratio = args.test_ratio
-random_G = args.random_G
-vLTP = args.vLTP
-vLTD = args.vLTD
-beta = args.beta
 ST = args.ST
 AST = args.AST
+drop_num = args.drop_num
+reinforce_num = args.reinforce_num
 FT = args.fault_type
 FS_input_num = args.FS_input_num
 FS_exc_num = args.FS_exc_num
-drop_num = args.drop_num
-reinforce_num = args.reinforce_num
 Pruning = args.Pruning
-Noise = args.Noise
-train_plot = args.train_plot
-test_plot = args.test_plot
+plot = args.plot
 gpu = args.gpu
 spare_gpu = args.spare_gpu
 
 # Sets up Gpu use
-gc.collect()
-torch.cuda.empty_cache()
-
 if spare_gpu != 0:
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = str(spare_gpu)
@@ -130,25 +103,8 @@ else:
         gpu = False
 
 torch.set_num_threads(os.cpu_count() - 1)
-print("Running on Device =", device)
-print("Random Seed =", random_seed)
-print("Random G value =", random_G)
-print("vLTP =", vLTP)
-print("vLTD =", vLTD)
-print("beta =", beta)
-print("ST =", ST)
-print("AST =", AST)
-print("Pruning =", Pruning)
-print("Fault type =", FT)
-print("Noise =", Noise)
 
-if not AST:
-    if ST:
-        print("drop synapse num =", drop_num)
-        print("reinforce synapse num =", reinforce_num)
-
-if FT is not None:
-    print("%d fault synapses per %d exc neurons" % (FS_input_num, FS_exc_num))
+print("Running on Device = ", device)
 
 # Determines number of workers to use
 if n_workers == -1:
@@ -157,99 +113,70 @@ if n_workers == -1:
 print(n_workers, os.cpu_count() - 1)
 
 n_sqrt = int(np.ceil(np.sqrt(n_neurons)))
+num_inputs = 784
 
-if encoder_type == "PoissonEncoder":
-    encoder = PoissonEncoder(time=time, dt=dt)
+# Build network.
+network = DiehlAndCook2015_MemSTDP(
+    n_inpt=num_inputs,
+    n_neurons=n_neurons,
+    update_rule=PostPre,
+    exc=exc,
+    inh=inh,
+    dt=dt,
+    norm=78.4,
+    theta_plus=theta_plus,
+    inpt_shape=(1, 28, 28),
+)
 
-elif encoder_type == "RankOrderEncoder":
-    encoder = RankOrderEncoder(time=time, dt=dt)
+# Directs network to GPU
+if gpu:
+    network.to("cuda")
 
-elif encoder_type == "TTFSEncoder":
-    encoder = RankOrderTTFSEncoder(time=time, dt=dt)
+# Load MNIST data.
+train_dataset = FashionMNIST(
+    PoissonEncoder(time=time, dt=dt),
+    None,
+    root=os.path.join("..", "..", "data", "FashionMNIST"),
+    download=True,
+    train=True,
+    transform=transforms.Compose(
+        [transforms.ToTensor(), transforms.Lambda(lambda x: x * intensity)]
+    ),
+)
 
-elif encoder_type == "TTASEncoder":
-    encoder = RankOrderTTASEncoder(time=time, dt=dt)
-
-elif encoder_type == "BernoulliEncoder":
-    encoder = BernoulliEncoder(time=time, dt=dt)
-
-elif encoder_type == "RepeatEncoder":
-    encoder = RepeatEncoder(time=time, dt=dt)
-
-else:
-    print("Error!! There is no such encoder!!")
-
-wave_data = []
-classes = []
-normalized = []
-class_avg = []
-
-data = minmax_scale(load_wine().data)
-
-if Noise:
-    noise_data = []
-    SNR = []
-    for sample in data:
-        noise = np.random.normal(0, 0.52, sample.shape)
-        noise_added = minmax_scale(sample + noise)
-        noise_data.append(noise_added)
-        SNR.append(20 * np.log10(np.linalg.norm(sample, 1) / np.linalg.norm(noise, 1)))
-
-    noise_data = np.array(noise_data)
-    SNR = np.average(np.array(SNR))
-    data = noise_data
-    print('SNR =', SNR, 'dB')
-
-target = load_wine().target
-whole = np.hstack((data, target.reshape(-1, 1)))
-
-for line in whole:
-    data = line[0:len(line) - 1]
-    marker = line[-1]
-
-    normalized.append(data)
-    classes.append(marker)
-    lbl = torch.tensor(marker).long()
-
-    scaled = intensity * data
-    converted = torch.tensor(scaled, dtype=torch.float32)
-    encoded = encoder.enc(datum=converted, time=time, dt=dt)
-    wave_data.append({"encoded_image": encoded, "label": lbl})
-
-train_data, test_data = train_test_split(wave_data, test_size=test_ratio)
-
-n_classes = (np.unique(classes)).size
-n_train = len(train_data)
-n_test = len(test_data)
-
-num_inputs = train_data[-1]["encoded_image"].shape[1]
-data_size = int(np.shape(normalized)[0] / n_classes)
-exc_size = int(np.sqrt(n_neurons))
-repeat = int(np.ceil(n_neurons / n_classes))
-whole_avg = np.sort(np.mean(normalized, axis=0))
-
+# AST settings
+pre_average = []
 drop_input = []
 drop_mask = torch.ones_like(torch.zeros(num_inputs, n_neurons)).to(device)
 reinforce_input = []
 reinforce_ref = []
 reinforce_mask = torch.zeros_like(torch.zeros(num_inputs, n_neurons)).to(device)
 
+pre = fashion_mnist.load_data()
+pre_x = pre[0][0].reshape(60000, num_inputs)
+pre_y = pre[0][1].reshape(60000, 1)
+preprocessed = np.concatenate((pre_x, pre_y), axis=1)
+preprocessed = preprocessed[preprocessed[:, 784].argsort()]
+preprocessed = preprocessed[:, 0:num_inputs]
+
+pre_size = 6000
+repeat = int(np.ceil(n_neurons / 10))
+entire = np.sort(np.mean(preprocessed, axis=0))
 
 if ST:
-    for i in range(n_classes):
-        class_avg.append(np.mean(normalized[i * data_size:(i + 1) * data_size], axis=0))
+    for i in range(10):
+        pre_average.append(np.mean(preprocessed[i * pre_size:(i + 1) * pre_size], axis=0))
 
         if AST:
-            drop_num = len(np.where(class_avg[i] <= whole_avg[int(num_inputs * 0.3) - 1])[0])        # drop 0.3
-            reinforce_num = len(np.where(class_avg[i] >= whole_avg[int(num_inputs * 1.0) - 1])[0])   # reinforce 1.0
+            drop_num = len(np.where(pre_average[i] <= entire[int(num_inputs * 0.3) - 1])[0])
+            reinforce_num = len(np.where(pre_average[i] >= entire[int(num_inputs * 1.0) - 1])[0])
 
-        drop_input.append(np.argwhere(class_avg[i] < np.sort(class_avg[i])[0:drop_num + 1][-1]).flatten())
+        drop_input.append(np.argwhere(pre_average[i] < np.sort(pre_average[i])[0:drop_num + 1][-1]).flatten())
         reinforce_input.append(
-            np.argwhere(class_avg[i] > np.sort(class_avg[i])[0:num_inputs - reinforce_num][-1]).flatten())
-
+            np.argwhere(pre_average[i] > np.sort(pre_average[i])[0:num_inputs - reinforce_num][-1]).flatten())
         if reinforce_num != 0:
-            values = np.sort(class_avg[i])[::-1][:reinforce_num]
-            reinforce_ref.append(values / np.max(values))
+            values = np.sort(pre_average[i])[::-1][:reinforce_num]
+            reinforce_ref.append(minmax_scale(values, feature_range=(0.9, 1.0)))
         else:
             reinforce_ref.append([])
 
@@ -265,32 +192,11 @@ if ST:
         for j in reinforce_input[i]:
             reinforce_mask[j][i] = reinforce_ref[i][int(np.where(j == reinforce_input[i])[0])]
 
-print(n_train, n_test, n_classes)
-
-# Build network.
-network = DiehlAndCook2015_MemSTDP(
-    n_inpt=num_inputs,
-    n_neurons=n_neurons,
-    exc=exc,
-    inh=inh,
-    rest=rest,
-    reset=reset,
-    thresh=thresh,
-    update_rule=PostPre,
-    dt=dt,
-    norm=num_inputs / 10 * weight_scale,
-    theta_plus=theta_plus,
-    inpt_shape=(1, num_inputs, 1)
-)
-
-# Directs network to GPU
-if gpu:
-    network.to("cuda")
-
 # Record spikes during the simulation.
 spike_record = torch.zeros((update_interval, int(time / dt), n_neurons), device=device)
 
 # Neuron assignments and spike proportions.
+n_classes = 10
 assignments = -torch.ones(n_neurons, device=device)
 proportions = torch.zeros((n_neurons, n_classes), device=device)
 rates = torch.zeros((n_neurons, n_classes), device=device)
@@ -299,8 +205,12 @@ rates = torch.zeros((n_neurons, n_classes), device=device)
 accuracy = {"all": [], "proportion": []}
 
 # Voltage recording for excitatory and inhibitory layers.
-exc_voltage_monitor = Monitor(network.layers["Ae"], ["v"], time=int(time / dt))
-inh_voltage_monitor = Monitor(network.layers["Ai"], ["v"], time=int(time / dt))
+exc_voltage_monitor = Monitor(
+    network.layers["Ae"], ["v"], time=int(time / dt), device=device
+)
+inh_voltage_monitor = Monitor(
+    network.layers["Ai"], ["v"], time=int(time / dt), device=device
+)
 network.add_monitor(exc_voltage_monitor, name="exc_voltage")
 network.add_monitor(inh_voltage_monitor, name="inh_voltage")
 
@@ -323,13 +233,9 @@ inpt_ims, inpt_axes = None, None
 spike_ims, spike_axes = None, None
 weights_im = None
 assigns_im = None
-hist_ax = None
 perf_ax = None
+hist_ax = None
 voltage_axes, voltage_ims = None, None
-
-# Random variables
-rand_gmax = 0.5 * torch.rand(num_inputs, n_neurons) + 0.5
-rand_gmin = 0.5 * torch.rand(num_inputs, n_neurons)
 
 # Dead synapse simulation
 if FT == "SA0":
@@ -352,8 +258,7 @@ elif FT == "SA1":
     dead_mask = torch.zeros_like(torch.zeros((num_inputs, n_neurons)))
     for i in range(len(dead_exc)):
         for j in dead_input[i]:
-            # dead_mask[j, dead_exc[i]] = rand_gmax[j, dead_exc[i]]
-            dead_mask[j, dead_exc[i]] = num_inputs / 10 * weight_scale
+            dead_mask[j, dead_exc[i]] = num_inputs / 10
 
 else:
     dead_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons)))
@@ -364,29 +269,32 @@ start = t()
 print("check accuracy per", update_interval)
 for epoch in range(n_epochs):
     labels = []
+
     if epoch % progress_interval == 0:
         print("Progress: %d / %d (%.4f seconds)" % (epoch, n_epochs, t() - start))
         start = t()
 
-    for step, batch in enumerate(tqdm(train_data)):
+    # Create a dataloader to iterate and batch data
+    dataloader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=1, shuffle=True, num_workers=n_workers, pin_memory=gpu
+    )
+
+    for step, batch in enumerate(tqdm(dataloader)):
         if step > n_train:
             break
         # Get next input sample.
-        inputs = {"X": batch["encoded_image"].view(int(time / dt), 1, 1, num_inputs, 1)}
+        inputs = {"X": batch["encoded_image"].view(int(time / dt), 1, 1, 28, 28)}
         if gpu:
             inputs = {k: v.cuda() for k, v in inputs.items()}
 
         if step % update_interval == 0 and step > 0:
             # Convert the array of labels into a tensor
             label_tensor = torch.tensor(labels, device=device)
+
             # Get network predictions.
-
             all_activity_pred = all_activity(
-                spikes=spike_record,
-                assignments=assignments,
-                n_labels=n_classes,
+                spikes=spike_record, assignments=assignments, n_labels=n_classes
             )
-
             proportion_pred = proportion_weighting(
                 spikes=spike_record,
                 assignments=assignments,
@@ -399,13 +307,11 @@ for epoch in range(n_epochs):
                 100
                 * torch.sum(label_tensor.long() == all_activity_pred).item()
                 / len(label_tensor)
-                # Match a label of a neuron that has the highest rate of spikes with a data's real label.
             )
             accuracy["proportion"].append(
                 100
                 * torch.sum(label_tensor.long() == proportion_pred).item()
                 / len(label_tensor)
-                # Match a label of a neuron that has the proportion of the highest spike rate with a data's real label.
             )
 
             print(
@@ -439,13 +345,8 @@ for epoch in range(n_epochs):
         labels.append(batch["label"])
 
         # Run the network on the input.
-        s_record = []
-        t_record = []
-        network.run(inputs=inputs, time=time, input_time_dim=1, s_record=s_record, t_record=t_record,
-                    simulation_time=time, rand_gmax=rand_gmax, rand_gmin=rand_gmin, random_G=random_G,
-                    vLTP=vLTP, vLTD=vLTD, beta=beta, n_neurons=n_neurons, ST=ST, Pruning=Pruning,
-                    drop_mask=drop_mask, # reinforce_mask=reinforce_mask,
-                    reinforce_input=reinforce_input, reinforce_ref=reinforce_ref,
+        network.run(inputs=inputs, time=time, input_time_dim=1, Pruning=Pruning,
+                    ST=ST, drop_mask=drop_mask, reinforce_mask=reinforce_mask,
                     fault_type=FT, dead_mask=dead_mask)
 
         # Get voltage recording.
@@ -456,12 +357,12 @@ for epoch in range(n_epochs):
         spike_record[step % update_interval] = spikes["Ae"].get("s").squeeze()
 
         # Optionally plot various simulation information.
-        if train_plot:
-            image = batch["encoded_image"].view(num_inputs, time)
-            inpt = inputs["X"].view(time, train_data[-1]["encoded_image"].shape[1]).sum(0).view(1, num_inputs)
+        if plot:
+            image = batch["image"].view(28, 28)
+            inpt = inputs["X"].view(time, 784).sum(0).view(28, 28)
             input_exc_weights = network.connections[("X", "Ae")].w
             square_weights = get_square_weights(
-                input_exc_weights.view(train_data[-1]["encoded_image"].shape[1], n_neurons), n_sqrt, (1, num_inputs),
+                input_exc_weights.view(784, n_neurons), n_sqrt, 28
             )
             square_assignments = get_square_assignments(assignments, n_sqrt)
             spikes_ = {layer: spikes[layer].get("s") for layer in spikes}
@@ -487,6 +388,19 @@ for epoch in range(n_epochs):
 print("Progress: %d / %d (%.4f seconds)" % (epoch + 1, n_epochs, t() - start))
 print("Training complete.\n")
 
+
+# Load MNIST data.
+test_dataset = FashionMNIST(
+    PoissonEncoder(time=time, dt=dt),
+    None,
+    root=os.path.join("..", "..", "data", "FashionMNIST"),
+    download=True,
+    train=False,
+    transform=transforms.Compose(
+        [transforms.ToTensor(), transforms.Lambda(lambda x: x * intensity)]
+    ),
+)
+
 # Sequence of accuracy estimates.
 accuracy = {"all": 0, "proportion": 0}
 
@@ -499,23 +413,17 @@ network.train(mode=False)
 start = t()
 
 pbar = tqdm(total=n_test)
-
-for step, batch in enumerate(test_data):
-    if step > n_test:
+for step, batch in enumerate(test_dataset):
+    if step >= n_test:
         break
     # Get next input sample.
-    inputs = {"X": batch["encoded_image"].view(int(time / dt), 1, 1, num_inputs, 1)}
+    inputs = {"X": batch["encoded_image"].view(int(time / dt), 1, 1, 28, 28)}
     if gpu:
         inputs = {k: v.cuda() for k, v in inputs.items()}
 
     # Run the network on the input.
-    s_record = []
-    t_record = []
-    network.run(inputs=inputs, time=time, input_time_dim=1, s_record=s_record, t_record=t_record,
-                simulation_time=time, rand_gmax=rand_gmax, rand_gmin=rand_gmin, random_G=random_G,
-                vLTP=vLTP, vLTD=vLTD, beta=beta, n_neurons=n_neurons, ST=ST, Pruning=Pruning,
-                drop_mask=drop_mask, # reinforce_mask=reinforce_mask,
-                reinforce_input=reinforce_input, reinforce_ref=reinforce_ref,
+    network.run(inputs=inputs, time=time, input_time_dim=1, Pruning=Pruning,
+                ST=ST, drop_mask=drop_mask, reinforce_mask=reinforce_mask,
                 fault_type=FT, dead_mask=dead_mask)
 
     # Add to spikes recording.
@@ -526,11 +434,8 @@ for step, batch in enumerate(test_data):
 
     # Get network predictions.
     all_activity_pred = all_activity(
-        spikes=spike_record,
-        assignments=assignments,
-        n_labels=n_classes
+        spikes=spike_record, assignments=assignments, n_labels=n_classes
     )
-
     proportion_pred = proportion_weighting(
         spikes=spike_record,
         assignments=assignments,
@@ -538,29 +443,18 @@ for step, batch in enumerate(test_data):
         n_labels=n_classes,
     )
 
-    if test_plot:
-        image = batch["encoded_image"].view(num_inputs, time)
-        inpt = inputs["X"].view(time, test_data[-1]["encoded_image"].shape[1]).sum(0).view(1, num_inputs)
-        spikes_ = {layer: spikes[layer].get("s") for layer in spikes}
-
-        spike_ims, spike_axes = plot_spikes(spikes_, ims=spike_ims, axes=spike_axes)
-        inpt_axes, inpt_ims = plot_input(
-            image, inpt, label=batch["label"], axes=inpt_axes, ims=inpt_ims
-        )
-
-        plt.pause(1e-8)
-
-    # print(accuracy["all"], label_tensor.long(), all_activity_pred)
     # Compute network accuracy according to available classification strategies.
     accuracy["all"] += float(torch.sum(label_tensor.long() == all_activity_pred).item())
-    accuracy["proportion"] += float(torch.sum(label_tensor.long() == proportion_pred).item())
+    accuracy["proportion"] += float(
+        torch.sum(label_tensor.long() == proportion_pred).item()
+    )
 
     network.reset_state_variables()  # Reset state variables.
     pbar.set_description_str("Test progress: ")
     pbar.update()
 
-    print("\nAll activity accuracy: %.2f" % (accuracy["all"] / n_test * 100))
-    print("Proportion weighting accuracy: %.2f \n" % (accuracy["proportion"] / n_test * 100))
+print("\nAll activity accuracy: %.2f" % (accuracy["all"] / n_test * 100))
+print("Proportion weighting accuracy: %.2f \n" % (accuracy["proportion"] / n_test * 100))
 
 print("Progress: %d / %d (%.4f seconds)" % (epoch + 1, n_epochs, t() - start))
 print("Testing complete.\n")

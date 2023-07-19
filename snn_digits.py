@@ -248,14 +248,13 @@ if ST:
         if reinforce_num != 0:
             values = np.sort(class_avg[i])[::-1][:reinforce_num]
             reinforce_ref.append(values / np.max(values))
+            # reinforce_ref.append(minmax_scale(values, feature_range=(0.1, 1.0)))
         else:
             reinforce_ref.append([])
 
     drop_input *= repeat
     reinforce_input *= repeat
-    reinforce_input = np.array(reinforce_input)
     reinforce_ref *= repeat
-    reinforce_ref = np.array(reinforce_ref)
 
     for i in range(n_neurons):
         for j in drop_input[i]:
