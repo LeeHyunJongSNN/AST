@@ -55,6 +55,7 @@ parser.add_argument("--FS_input_num", type=int, default=0)
 parser.add_argument("--FS_exc_num", type=int, default=0)
 parser.add_argument("--Pruning", type=bool, default=False)
 parser.add_argument("--Noise", type=bool, default=False)
+parser.add_argument("--std", type=float, default=0.2)
 parser.add_argument("--plot", dest="plot", action="store_true")
 parser.add_argument("--gpu", dest="gpu", action="store_true")
 parser.add_argument("--spare_gpu", dest="spare_gpu", default=0)
@@ -85,6 +86,7 @@ FS_input_num = args.FS_input_num
 FS_exc_num = args.FS_exc_num
 Pruning = args.Pruning
 Noise = args.Noise
+std = args.std
 plot = args.plot
 gpu = args.gpu
 spare_gpu = args.spare_gpu
@@ -166,19 +168,20 @@ reinforce_ref = []
 reinforce_mask = torch.zeros_like(torch.zeros(num_inputs, n_neurons)).to(device)
 
 pre = fashion_mnist.load_data()
+pre_x = minmax_scale(pre[0][0].reshape(60000, num_inputs))
+pre_y = pre[0][1].reshape(60000, 1)
 
 if Noise:
     noise_data = []
     SNR = []
-    for sample in pre:
-        noise = np.random.normal(0, 0.38, sample.shape)
+    for sample in pre_x:
+        noise = np.random.normal(0, std, sample.shape)
         noise_added = minmax_scale(sample + noise)
         noise_data.append(noise_added)
         SNR.append(20 * np.log10(np.linalg.norm(sample, 1) / np.linalg.norm(noise, 1)))
 
-    noise_data = np.array(noise_data)
+    pre_x = np.array(noise_data)
     SNR = np.average(np.array(SNR))
-    data = noise_data
     print('SNR =', SNR, 'dB')
 
     train_dataset = FashionMNIST(
@@ -189,8 +192,9 @@ if Noise:
         train=True,
         transform=transforms.Compose(
             [transforms.ToTensor(),
-             transforms.Lambda(lambda x: x + torch.randn(x.size()) * 0.38),
-             transforms.Lambda(lambda x: x * intensity)]
+             transforms.Lambda(lambda x: x + torch.randn(x.size()) * std),
+             transforms.Lambda(lambda x: torch.tensor(minmax_scale(x.cpu().numpy().reshape(-1))).
+                               reshape(1, 28, 28) * intensity)]
         ),
     )
 
@@ -202,13 +206,12 @@ if Noise:
         train=False,
         transform=transforms.Compose(
             [transforms.ToTensor(),
-             transforms.Lambda(lambda x: x + torch.randn(x.size()) * 0.38),
-             transforms.Lambda(lambda x: x * intensity)]
+             transforms.Lambda(lambda x: abs(x) + torch.randn(x.size()) * std),
+             transforms.Lambda(lambda x: torch.tensor(minmax_scale(x.cpu().numpy().reshape(-1))).
+                               reshape(1, 28, 28) * intensity)]
         ),
     )
 
-pre_x = pre[0][0].reshape(60000, num_inputs)
-pre_y = pre[0][1].reshape(60000, 1)
 preprocessed = np.concatenate((pre_x, pre_y), axis=1)
 preprocessed = preprocessed[preprocessed[:, 784].argsort()]
 preprocessed = preprocessed[:, 0:num_inputs]
