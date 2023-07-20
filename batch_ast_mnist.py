@@ -37,7 +37,7 @@ parser.add_argument("--n_neurons", type=int, default=400)
 parser.add_argument("--batch_size", type=int, default=32)
 parser.add_argument("--n_epochs", type=int, default=1)
 parser.add_argument("--n_test", type=int, default=10000)
-parser.add_argument("--n_train", type=int, default=60000)
+parser.add_argument("--n_train", type=int, default=10000)
 parser.add_argument("--n_workers", type=int, default=-1)
 parser.add_argument("--n_updates", type=int, default=10)
 parser.add_argument("--exc", type=float, default=22.5)
@@ -55,6 +55,7 @@ parser.add_argument("--FT", dest="fault_type", default=None)
 parser.add_argument("--FS_input_num", type=int, default=0)
 parser.add_argument("--FS_exc_num", type=int, default=0)
 parser.add_argument("--Pruning", type=bool, default=False)
+parser.add_argument("--Noise", type=bool, default=False)
 parser.add_argument("--plot", dest="plot", action="store_true")
 parser.add_argument("--gpu", dest="gpu", action="store_true")
 parser.add_argument("--spare_gpu", dest="spare_gpu", default=0)
@@ -85,6 +86,7 @@ FT = args.fault_type
 FS_input_num = args.FS_input_num
 FS_exc_num = args.FS_exc_num
 Pruning = args.Pruning
+Noise = args.Noise
 plot = args.plot
 gpu = args.gpu
 spare_gpu = args.spare_gpu
@@ -138,11 +140,23 @@ if gpu:
     network.to("cuda")
 
 # Load MNIST data.
-dataset = MNIST(
+train_dataset = MNIST(
     PoissonEncoder(time=time, dt=dt),
     None,
     "../../data/MNIST",
     download=True,
+    transform=transforms.Compose(
+        [transforms.ToTensor(),
+         transforms.Lambda(lambda x: x * intensity)]
+    ),
+)
+
+test_dataset = MNIST(
+    PoissonEncoder(time=time, dt=dt),
+    None,
+    root=os.path.join(ROOT_DIR, "data", "MNIST"),
+    download=True,
+    train=False,
     transform=transforms.Compose(
         [transforms.ToTensor(), transforms.Lambda(lambda x: x * intensity)]
     ),
@@ -157,6 +171,46 @@ reinforce_ref = []
 reinforce_mask = torch.zeros_like(torch.zeros(num_inputs, n_neurons)).to(device)
 
 pre = mnist.load_data()
+
+if Noise:
+    noise_data = []
+    SNR = []
+    for sample in pre:
+        noise = np.random.normal(0, 0.38, sample.shape)
+        noise_added = minmax_scale(sample + noise)
+        noise_data.append(noise_added)
+        SNR.append(20 * np.log10(np.linalg.norm(sample, 1) / np.linalg.norm(noise, 1)))
+
+    noise_data = np.array(noise_data)
+    SNR = np.average(np.array(SNR))
+    data = noise_data
+    print('SNR =', SNR, 'dB')
+
+    train_dataset = MNIST(
+        PoissonEncoder(time=time, dt=dt),
+        None,
+        "../../data/MNIST",
+        download=True,
+        transform=transforms.Compose(
+            [transforms.ToTensor(),
+             transforms.Lambda(lambda x: x + x.randn(x.size()) * 0.38),
+             transforms.Lambda(lambda x: x * intensity)]
+        ),
+    )
+
+    test_dataset = MNIST(
+        PoissonEncoder(time=time, dt=dt),
+        None,
+        root=os.path.join(ROOT_DIR, "data", "MNIST"),
+        download=True,
+        train=False,
+        transform=transforms.Compose(
+            [transforms.ToTensor(),
+             transforms.Lambda(lambda x: x + x.randn(x.size()) * 0.38),
+             transforms.Lambda(lambda x: x * intensity)]
+        ),
+    )
+
 pre_x = pre[0][0].reshape(60000, num_inputs)
 pre_y = pre[0][1].reshape(60000, 1)
 preprocessed = np.concatenate((pre_x, pre_y), axis=1)
@@ -278,7 +332,7 @@ for epoch in range(n_epochs):
 
     # Create a dataloader to iterate and batch data
     train_dataloader = DataLoader(
-        dataset,
+        train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=n_workers,
@@ -406,18 +460,6 @@ for epoch in range(n_epochs):
 
 print("Progress: %d / %d (%.4f seconds)" % (epoch + 1, n_epochs, t() - start))
 print("\nTraining complete.\n")
-
-# Load MNIST data.
-test_dataset = MNIST(
-    PoissonEncoder(time=time, dt=dt),
-    None,
-    root=os.path.join(ROOT_DIR, "data", "MNIST"),
-    download=True,
-    train=False,
-    transform=transforms.Compose(
-        [transforms.ToTensor(), transforms.Lambda(lambda x: x * intensity)]
-    ),
-)
 
 # Create a dataloader to iterate and batch data
 test_dataloader = DataLoader(

@@ -43,7 +43,7 @@ parser.add_argument("--inh", type=float, default=120)
 parser.add_argument("--theta_plus", type=float, default=0.05)
 parser.add_argument("--time", type=int, default=250)
 parser.add_argument("--dt", type=int, default=1.0)
-parser.add_argument("--intensity", type=float, default=128)
+parser.add_argument("--intensity", type=float, default=256)
 parser.add_argument("--progress_interval", type=int, default=10)
 parser.add_argument("--update_interval", type=int, default=100)
 parser.add_argument("--ST", type=bool, default=True)
@@ -54,10 +54,11 @@ parser.add_argument("--FT", dest="fault_type", default=None)
 parser.add_argument("--FS_input_num", type=int, default=0)
 parser.add_argument("--FS_exc_num", type=int, default=0)
 parser.add_argument("--Pruning", type=bool, default=False)
+parser.add_argument("--Noise", type=bool, default=False)
 parser.add_argument("--plot", dest="plot", action="store_true")
 parser.add_argument("--gpu", dest="gpu", action="store_true")
 parser.add_argument("--spare_gpu", dest="spare_gpu", default=0)
-parser.set_defaults(plot=False, gpu=True)
+parser.set_defaults(plot=True, gpu=True)
 
 args = parser.parse_args()
 
@@ -83,6 +84,7 @@ FT = args.fault_type
 FS_input_num = args.FS_input_num
 FS_exc_num = args.FS_exc_num
 Pruning = args.Pruning
+Noise = args.Noise
 plot = args.plot
 gpu = args.gpu
 spare_gpu = args.spare_gpu
@@ -144,6 +146,17 @@ train_dataset = FashionMNIST(
     ),
 )
 
+test_dataset = FashionMNIST(
+    PoissonEncoder(time=time, dt=dt),
+    None,
+    root=os.path.join("..", "..", "data", "FashionMNIST"),
+    download=True,
+    train=False,
+    transform=transforms.Compose(
+        [transforms.ToTensor(), transforms.Lambda(lambda x: x * intensity)]
+    ),
+)
+
 # AST settings
 pre_average = []
 drop_input = []
@@ -153,6 +166,47 @@ reinforce_ref = []
 reinforce_mask = torch.zeros_like(torch.zeros(num_inputs, n_neurons)).to(device)
 
 pre = fashion_mnist.load_data()
+
+if Noise:
+    noise_data = []
+    SNR = []
+    for sample in pre:
+        noise = np.random.normal(0, 0.38, sample.shape)
+        noise_added = minmax_scale(sample + noise)
+        noise_data.append(noise_added)
+        SNR.append(20 * np.log10(np.linalg.norm(sample, 1) / np.linalg.norm(noise, 1)))
+
+    noise_data = np.array(noise_data)
+    SNR = np.average(np.array(SNR))
+    data = noise_data
+    print('SNR =', SNR, 'dB')
+
+    train_dataset = FashionMNIST(
+        PoissonEncoder(time=time, dt=dt),
+        None,
+        root=os.path.join("..", "..", "data", "FashionMNIST"),
+        download=True,
+        train=True,
+        transform=transforms.Compose(
+            [transforms.ToTensor(),
+             transforms.Lambda(lambda x: x + torch.randn(x.size()) * 0.38),
+             transforms.Lambda(lambda x: x * intensity)]
+        ),
+    )
+
+    test_dataset = FashionMNIST(
+        PoissonEncoder(time=time, dt=dt),
+        None,
+        root=os.path.join("..", "..", "data", "FashionMNIST"),
+        download=True,
+        train=False,
+        transform=transforms.Compose(
+            [transforms.ToTensor(),
+             transforms.Lambda(lambda x: x + torch.randn(x.size()) * 0.38),
+             transforms.Lambda(lambda x: x * intensity)]
+        ),
+    )
+
 pre_x = pre[0][0].reshape(60000, num_inputs)
 pre_y = pre[0][1].reshape(60000, 1)
 preprocessed = np.concatenate((pre_x, pre_y), axis=1)
@@ -387,19 +441,6 @@ for epoch in range(n_epochs):
 
 print("Progress: %d / %d (%.4f seconds)" % (epoch + 1, n_epochs, t() - start))
 print("Training complete.\n")
-
-
-# Load MNIST data.
-test_dataset = FashionMNIST(
-    PoissonEncoder(time=time, dt=dt),
-    None,
-    root=os.path.join("..", "..", "data", "FashionMNIST"),
-    download=True,
-    train=False,
-    transform=transforms.Compose(
-        [transforms.ToTensor(), transforms.Lambda(lambda x: x * intensity)]
-    ),
-)
 
 # Sequence of accuracy estimates.
 accuracy = {"all": 0, "proportion": 0}
