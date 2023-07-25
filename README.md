@@ -7,7 +7,7 @@ I built these files with BindsNET.
 Therefore, they demand BindsNET to operate.
 To use AST, they require our add-on packages with additional features that I have developed.
 Unfortunately, I do not have permission to upload the packages on Github.
-Please install BindsNET and contact me to get the add-on packages.
+Please install BindsNET and contact me to get the add-on packages. (hetzer44@naver.com)
 
 # How to use AST with additional package
 I cannot upload our add-on packages because I do not have permission to release.
@@ -25,7 +25,7 @@ ast_minst.py is a Python file for classifying MNIST (28x28 pixels) dataset.
 
 ast_fminst.py is a Python file for classifying Fashion MNIST (28x28 pixels) dataset.
 
-Python files with batch update synaptic weights using batches.
+Python files with 'batch' update synaptic weights using batches.
 
 # Implementation
 We implemented two versions of AST. 
