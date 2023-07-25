@@ -7,12 +7,11 @@ I built these files with BindsNET.
 Therefore, they demand BindsNET to operate.
 To use AST, they require our add-on packages with additional features that I have developed.
 Unfortunately, I do not have permission to upload the packages on Github.
-Please install BindsNET and contact me to get the add-on packages. (hetzer44@naver.com)
+Please install BindsNET and contact me to get the add-on packages.
 
 # How to use AST with additional package
 I cannot upload our add-on packages because I do not have permission to release.
-If you need the package and more datasets, please e-mail me.
-hetzer44@naver.com
+If you need the package and more datasets, please e-mail me. (hetzer44@naver.com)
 Then, I will send the package and datasets.
 For using the package, just put the package into the bindsnet folder in the python library folder (site-packages)
 
