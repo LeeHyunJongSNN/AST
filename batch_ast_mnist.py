@@ -14,7 +14,6 @@ from tqdm import tqdm
 from keras.datasets import mnist
 from sklearn.preprocessing import minmax_scale
 
-from bindsnet import ROOT_DIR
 from bindsnet.analysis.plotting import (
     plot_assignments,
     plot_input,
@@ -27,7 +26,7 @@ from bindsnet.datasets import MNIST, DataLoader
 from bindsnet.encoding import PoissonEncoder
 from bindsnet.evaluation import all_activity, assign_labels, proportion_weighting
 from bindsnet.memstdp.MemSTDP_models import DiehlAndCook2015_MemSTDP
-from bindsnet.memstdp.MemSTDP_learning import PostPre, Thresh_PostPre
+from bindsnet.memstdp.MemSTDP_learning import PostPre, Constraint_PostPre, STB_PostPre
 from bindsnet.network.monitors import Monitor
 from bindsnet.utils import get_square_assignments, get_square_weights
 
@@ -45,22 +44,23 @@ parser.add_argument("--inh", type=float, default=120)
 parser.add_argument("--theta_plus", type=float, default=0.05)
 parser.add_argument("--time", type=int, default=250)
 parser.add_argument("--dt", type=int, default=1.0)
-parser.add_argument("--intensity", type=float, default=128)
+parser.add_argument("--intensity", type=float, default=64)
+parser.add_argument("--weight_scale", type=float, default=1.0)
 parser.add_argument("--progress_interval", type=int, default=10)
-parser.add_argument("--ST", type=bool, default=True)
-parser.add_argument("--AST", type=bool, default=True)
+parser.add_argument("--ST", type=bool, default=False)
+parser.add_argument("--AST", type=bool, default=False)
 parser.add_argument("--drop_num", type=int, default=320)
 parser.add_argument("--reinforce_num", type=int, default=25)
 parser.add_argument("--FT", dest="fault_type", default=None)
-parser.add_argument("--FS_input_num", type=int, default=0)
-parser.add_argument("--FS_exc_num", type=int, default=0)
+parser.add_argument("--FS_input_num", type=int, default=500)
+parser.add_argument("--FS_exc_num", type=int, default=400)
 parser.add_argument("--Pruning", type=bool, default=False)
 parser.add_argument("--Noise", type=bool, default=True)
-parser.add_argument("--std", type=float, default=0.2)
+parser.add_argument("--std", type=float, default=0.16)
 parser.add_argument("--plot", dest="plot", action="store_true")
 parser.add_argument("--gpu", dest="gpu", action="store_true")
 parser.add_argument("--spare_gpu", dest="spare_gpu", default=0)
-parser.set_defaults(plot=True, gpu=True)
+parser.set_defaults(plot=False, gpu=True)
 
 args = parser.parse_args()
 
@@ -78,6 +78,7 @@ theta_plus = args.theta_plus
 time = args.time
 dt = args.dt
 intensity = args.intensity
+weight_scale = args.weight_scale
 progress_interval = args.progress_interval
 ST = args.ST
 AST = args.AST
@@ -124,14 +125,15 @@ n_sqrt = int(np.ceil(np.sqrt(n_neurons)))
 num_inputs = 784
 
 # Build network.
+
 network = DiehlAndCook2015_MemSTDP(
-    n_inpt=784,
+    n_inpt=num_inputs,
     n_neurons=n_neurons,
-    update_rule=PostPre,
+    update_rule=STB_PostPre,
     exc=exc,
     inh=inh,
     dt=dt,
-    norm=78.4,
+    norm=num_inputs / 10 * weight_scale,
     nu=(1e-4, 1e-2),
     theta_plus=theta_plus,
     inpt_shape=(1, 28, 28),
@@ -145,7 +147,7 @@ if gpu:
 train_dataset = MNIST(
     PoissonEncoder(time=time, dt=dt),
     None,
-    "../../data/MNIST",
+    "../data/MNIST",
     download=True,
     transform=transforms.Compose(
         [transforms.ToTensor(),
@@ -156,7 +158,7 @@ train_dataset = MNIST(
 test_dataset = MNIST(
     PoissonEncoder(time=time, dt=dt),
     None,
-    root=os.path.join(ROOT_DIR, "data", "MNIST"),
+    "../data/MNIST",
     download=True,
     train=False,
     transform=transforms.Compose(
@@ -192,11 +194,11 @@ if Noise:
     train_dataset = MNIST(
         PoissonEncoder(time=time, dt=dt),
         None,
-        "../../data/MNIST",
+        "../data/MNIST",
         download=True,
         transform=transforms.Compose(
             [transforms.ToTensor(),
-             transforms.Lambda(lambda x: x + torch.randn(x.size()) * 0.1),
+             transforms.Lambda(lambda x: x + torch.randn(x.size()) * std),
              transforms.Lambda(lambda x: torch.tensor(minmax_scale(x.cpu().numpy().reshape(-1))).
                                reshape(1, 28, 28) * intensity)]
         ),
@@ -205,12 +207,12 @@ if Noise:
     test_dataset = MNIST(
         PoissonEncoder(time=time, dt=dt),
         None,
-        root=os.path.join(ROOT_DIR, "data", "MNIST"),
+        "../data/MNIST",
         download=True,
         train=False,
         transform=transforms.Compose(
             [transforms.ToTensor(),
-             transforms.Lambda(lambda x: x + torch.randn(x.size()) * 0.1),
+             transforms.Lambda(lambda x: x + torch.randn(x.size()) * std),
              transforms.Lambda(lambda x: torch.tensor(minmax_scale(x.cpu().numpy().reshape(-1))).
                                reshape(1, 28, 28) * intensity)]
         ),
@@ -229,15 +231,15 @@ if ST:
         pre_average.append(np.mean(preprocessed[i * pre_size:(i + 1) * pre_size], axis=0))
 
         if AST:
-            drop_num = len(np.where(pre_average[i] <= entire[int(num_inputs * 0.3) - 1])[0])
-            reinforce_num = len(np.where(pre_average[i] >= entire[int(num_inputs * 1.0) - 1])[0])
+            drop_num = len(np.where(pre_average[i] <= entire[int(num_inputs * 0.2) - 1])[0])        # 0.2
+            reinforce_num = len(np.where(pre_average[i] >= entire[int(num_inputs * 1.0) - 1])[0])   # 1.0
 
         drop_input.append(np.argwhere(pre_average[i] < np.sort(pre_average[i])[0:drop_num + 1][-1]).flatten())
         reinforce_input.append(
             np.argwhere(pre_average[i] > np.sort(pre_average[i])[0:num_inputs - reinforce_num][-1]).flatten())
         if reinforce_num != 0:
             values = np.sort(pre_average[i])[::-1][:reinforce_num]
-            reinforce_ref.append(minmax_scale(values, feature_range=(0.9, 1.0)))
+            reinforce_ref.append(minmax_scale(values, feature_range=(0.9, 1.0)) * weight_scale)
         else:
             reinforce_ref.append([])
 
@@ -303,10 +305,10 @@ if FT == "SA0":
         dead_input.append(random.sample(range(0, num_inputs), FS_input_num))
     dead_exc = random.sample(range(0, n_neurons), FS_exc_num)
 
-    dead_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons)))
+    fault_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons))).to(device)
     for i in range(len(dead_exc)):
         for j in dead_input[i]:
-            dead_mask[j, dead_exc[i]] = 0
+            fault_mask[j, dead_exc[i]] = 0
 
 elif FT == "SA1":
     dead_input = []
@@ -314,13 +316,13 @@ elif FT == "SA1":
         dead_input.append(random.sample(range(0, num_inputs), FS_input_num))
     dead_exc = random.sample(range(0, n_neurons), FS_exc_num)
 
-    dead_mask = torch.zeros_like(torch.zeros((num_inputs, n_neurons)))
+    fault_mask = torch.zeros_like(torch.zeros((num_inputs, n_neurons))).to(device)
     for i in range(len(dead_exc)):
         for j in dead_input[i]:
-            dead_mask[j, dead_exc[i]] = num_inputs / 10
+            fault_mask[j, dead_exc[i]] = num_inputs / 10
 
 else:
-    dead_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons)))
+    fault_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons))).to(device)
 
 # Train the network.
 print("\nBegin training...")
@@ -414,7 +416,7 @@ for epoch in range(n_epochs):
         # Run the network on the input.
         network.run(inputs=inputs, time=time, Pruning=Pruning,
                     ST=ST, drop_mask=drop_mask, reinforce_mask=reinforce_mask,
-                    fault_type=FT, dead_mask=dead_mask)
+                    fault_type=FT, fault_mask=fault_mask)
 
         # Add to spikes recording.
         s = spikes["Ae"].get("s").permute((1, 0, 2))
@@ -495,7 +497,7 @@ for step, batch in enumerate(test_dataloader):
     # Run the network on the input.
     network.run(inputs=inputs, time=time, Pruning=Pruning,
                 ST=ST, drop_mask=drop_mask, reinforce_mask=reinforce_mask,
-                fault_type=FT, dead_mask=dead_mask)
+                fault_type=FT, fault_mask=fault_mask)
 
     # Add to spikes recording.
     spike_record = spikes["Ae"].get("s").permute((1, 0, 2))

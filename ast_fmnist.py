@@ -26,7 +26,7 @@ from bindsnet.datasets import FashionMNIST
 from bindsnet.encoding import PoissonEncoder
 from bindsnet.evaluation import all_activity, assign_labels, proportion_weighting
 from bindsnet.memstdp.MemSTDP_models import DiehlAndCook2015_MemSTDP
-from bindsnet.memstdp.MemSTDP_learning import PostPre, Thresh_PostPre
+from bindsnet.memstdp.MemSTDP_learning import PostPre, Constraint_PostPre
 from bindsnet.network.monitors import Monitor
 from bindsnet.utils import get_square_assignments, get_square_weights
 from bindsnet.memstdp.plotting_weights_counts import hist_weights
@@ -44,6 +44,7 @@ parser.add_argument("--theta_plus", type=float, default=0.05)
 parser.add_argument("--time", type=int, default=250)
 parser.add_argument("--dt", type=int, default=1.0)
 parser.add_argument("--intensity", type=float, default=256)
+parser.add_argument("--weight_scale", type=float, default=1.0)
 parser.add_argument("--progress_interval", type=int, default=10)
 parser.add_argument("--update_interval", type=int, default=100)
 parser.add_argument("--ST", type=bool, default=True)
@@ -75,6 +76,7 @@ theta_plus = args.theta_plus
 time = args.time
 dt = args.dt
 intensity = args.intensity
+weight_scale = args.weight_scale
 progress_interval = args.progress_interval
 update_interval = args.update_interval
 ST = args.ST
@@ -127,7 +129,7 @@ network = DiehlAndCook2015_MemSTDP(
     exc=exc,
     inh=inh,
     dt=dt,
-    norm=78.4,
+    norm=num_inputs / 10 * weight_scale,
     theta_plus=theta_plus,
     inpt_shape=(1, 28, 28),
 )
@@ -140,7 +142,7 @@ if gpu:
 train_dataset = FashionMNIST(
     PoissonEncoder(time=time, dt=dt),
     None,
-    root=os.path.join("..", "..", "data", "FashionMNIST"),
+    "../data/FashionMNIST",
     download=True,
     train=True,
     transform=transforms.Compose(
@@ -151,7 +153,7 @@ train_dataset = FashionMNIST(
 test_dataset = FashionMNIST(
     PoissonEncoder(time=time, dt=dt),
     None,
-    root=os.path.join("..", "..", "data", "FashionMNIST"),
+    "../data/FashionMNIST",
     download=True,
     train=False,
     transform=transforms.Compose(
@@ -187,7 +189,7 @@ if Noise:
     train_dataset = FashionMNIST(
         PoissonEncoder(time=time, dt=dt),
         None,
-        root=os.path.join("..", "..", "data", "FashionMNIST"),
+        "../data/FashionMNIST",
         download=True,
         train=True,
         transform=transforms.Compose(
@@ -201,7 +203,7 @@ if Noise:
     test_dataset = FashionMNIST(
         PoissonEncoder(time=time, dt=dt),
         None,
-        root=os.path.join("..", "..", "data", "FashionMNIST"),
+        "../data/FashionMNIST",
         download=True,
         train=False,
         transform=transforms.Compose(
@@ -233,7 +235,7 @@ if ST:
             np.argwhere(pre_average[i] > np.sort(pre_average[i])[0:num_inputs - reinforce_num][-1]).flatten())
         if reinforce_num != 0:
             values = np.sort(pre_average[i])[::-1][:reinforce_num]
-            reinforce_ref.append(minmax_scale(values, feature_range=(0.9, 1.0)))
+            reinforce_ref.append(minmax_scale(values, feature_range=(0.9, 1.0)) * weight_scale)
         else:
             reinforce_ref.append([])
 
@@ -296,29 +298,29 @@ voltage_axes, voltage_ims = None, None
 
 # Dead synapse simulation
 if FT == "SA0":
-    dead_input = []
+    fault_input = []
     for i in range(FS_exc_num):
-        dead_input.append(random.sample(range(0, num_inputs), FS_input_num))
-    dead_exc = random.sample(range(0, n_neurons), FS_exc_num)
+        fault_input.append(random.sample(range(0, num_inputs), FS_input_num))
+    fault_exc = random.sample(range(0, n_neurons), FS_exc_num)
 
-    dead_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons)))
-    for i in range(len(dead_exc)):
-        for j in dead_input[i]:
-            dead_mask[j, dead_exc[i]] = 0
+    fault_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons))).to(device)
+    for i in range(len(fault_exc)):
+        for j in fault_input[i]:
+            fault_mask[j, fault_exc[i]] = 0
 
 elif FT == "SA1":
-    dead_input = []
+    fault_input = []
     for i in range(FS_exc_num):
-        dead_input.append(random.sample(range(0, num_inputs), FS_input_num))
-    dead_exc = random.sample(range(0, n_neurons), FS_exc_num)
+        fault_input.append(random.sample(range(0, num_inputs), FS_input_num))
+    fault_exc = random.sample(range(0, n_neurons), FS_exc_num)
 
-    dead_mask = torch.zeros_like(torch.zeros((num_inputs, n_neurons)))
-    for i in range(len(dead_exc)):
-        for j in dead_input[i]:
-            dead_mask[j, dead_exc[i]] = num_inputs / 10
+    fault_mask = torch.zeros_like(torch.zeros((num_inputs, n_neurons))).to(device)
+    for i in range(len(fault_exc)):
+        for j in fault_input[i]:
+            fault_mask[j, fault_exc[i]] = num_inputs / 10
 
 else:
-    dead_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons)))
+    fault_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons))).to(device)
 
 # Train the network.
 print("\nBegin training.\n")
@@ -350,8 +352,11 @@ for epoch in range(n_epochs):
 
             # Get network predictions.
             all_activity_pred = all_activity(
-                spikes=spike_record, assignments=assignments, n_labels=n_classes
+                spikes=spike_record,
+                assignments=assignments,
+                n_labels=n_classes
             )
+
             proportion_pred = proportion_weighting(
                 spikes=spike_record,
                 assignments=assignments,
@@ -404,7 +409,7 @@ for epoch in range(n_epochs):
         # Run the network on the input.
         network.run(inputs=inputs, time=time, input_time_dim=1, Pruning=Pruning,
                     ST=ST, drop_mask=drop_mask, reinforce_mask=reinforce_mask,
-                    fault_type=FT, dead_mask=dead_mask)
+                    fault_type=FT, fault_mask=fault_mask)
 
         # Get voltage recording.
         exc_voltages = exc_voltage_monitor.get("v")
@@ -468,7 +473,7 @@ for step, batch in enumerate(test_dataset):
     # Run the network on the input.
     network.run(inputs=inputs, time=time, input_time_dim=1, Pruning=Pruning,
                 ST=ST, drop_mask=drop_mask, reinforce_mask=reinforce_mask,
-                fault_type=FT, dead_mask=dead_mask)
+                fault_type=FT, fault_mask=fault_mask)
 
     # Add to spikes recording.
     spike_record[0] = spikes["Ae"].get("s").squeeze()

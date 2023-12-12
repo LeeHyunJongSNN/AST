@@ -4,6 +4,8 @@ import torch
 import argparse
 import random
 import numpy as np
+import matplotlib
+matplotlib.use("TkAgg", force=True)
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
@@ -15,7 +17,7 @@ from sklearn.preprocessing import minmax_scale
 from bindsnet.encoding import PoissonEncoder, RankOrderEncoder, BernoulliEncoder, RepeatEncoder
 from bindsnet.memstdp import RankOrderTTFSEncoder, RankOrderTTASEncoder
 from bindsnet.memstdp.MemSTDP_models import AdaptiveIFNetwork_MemSTDP, DiehlAndCook2015_MemSTDP, KISTnetwork_MemSTDP
-from bindsnet.memstdp.MemSTDP_learning import MemristiveSTDP_TimeProportion, PostPre, Thresh_PostPre
+from bindsnet.memstdp.MemSTDP_learning import MemristiveSTDP_TimeProportion, PostPre, Constraint_PostPre, STB_PostPre
 from bindsnet.network.monitors import Monitor
 from bindsnet.utils import get_square_assignments, get_square_weights
 from bindsnet.evaluation import (
@@ -58,15 +60,15 @@ parser.add_argument("--random_G", type=bool, default=False)
 parser.add_argument("--vLTP", type=float, default=0.0)
 parser.add_argument("--vLTD", type=float, default=0.0)
 parser.add_argument("--beta", type=float, default=1.0)
-parser.add_argument("--ST", type=bool, default=True)
-parser.add_argument("--AST", type=bool, default=True)
+parser.add_argument("--ST", type=bool, default=False)
+parser.add_argument("--AST", type=bool, default=False)
 parser.add_argument("--drop_num", type=int, default=2)
 parser.add_argument("--reinforce_num", type=int, default=2)
 parser.add_argument("--FT", dest="fault_type", default=None)
 parser.add_argument("--FS_input_num", type=int, default=64)
 parser.add_argument("--FS_exc_num", type=int, default=1)
 parser.add_argument("--Pruning", type=bool, default=False)
-parser.add_argument("--Noise", type=bool, default=False)
+parser.add_argument("--Noise", type=bool, default=True)
 parser.add_argument("--gpu", dest="gpu", action="store_true")
 parser.add_argument("--spare_gpu", dest="spare_gpu", default=0)
 parser.set_defaults(train_plot=False, test_plot=False, gpu=False)
@@ -183,6 +185,7 @@ normalized = []
 class_avg = []
 
 data = minmax_scale(load_digits().data)
+target = load_digits().target
 
 if Noise:
     noise_data = []
@@ -198,11 +201,10 @@ if Noise:
     data = noise_data
     print('SNR =', SNR, 'dB')
 
-target = load_digits().target
 whole = np.hstack((data, target.reshape(-1, 1)))
-sorted = whole[whole[:, -1].argsort()]
+sorted_data = whole[whole[:, -1].argsort()]
 
-for line in sorted:
+for line in sorted_data:
     data_sample = line[0:len(line) - 1]
     marker = line[-1]
 
@@ -248,7 +250,6 @@ if ST:
         if reinforce_num != 0:
             values = np.sort(class_avg[i])[::-1][:reinforce_num]
             reinforce_ref.append(values / np.max(values))
-            # reinforce_ref.append(minmax_scale(values, feature_range=(0.1, 1.0)))
         else:
             reinforce_ref.append([])
 
@@ -275,7 +276,7 @@ network = DiehlAndCook2015_MemSTDP(
     rest=rest,
     reset=reset,
     thresh=thresh,
-    update_rule=PostPre,
+    update_rule=STB_PostPre,
     dt=dt,
     norm=num_inputs / 10 * weight_scale,
     theta_plus=theta_plus,
@@ -332,30 +333,30 @@ rand_gmin = 0.5 * torch.rand(num_inputs, n_neurons)
 
 # Dead synapse simulation
 if FT == "SA0":
-    dead_input = []
+    fault_input = []
     for i in range(FS_exc_num):
-        dead_input.append(random.sample(range(0, num_inputs), FS_input_num))
-    dead_exc = random.sample(range(0, n_neurons), FS_exc_num)
+        fault_input.append(random.sample(range(0, num_inputs), FS_input_num))
+    fault_exc = random.sample(range(0, n_neurons), FS_exc_num)
 
-    dead_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons)))
-    for i in range(len(dead_exc)):
-        for j in dead_input[i]:
-            dead_mask[j, dead_exc[i]] = 0
+    fault_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons)))
+    for i in range(len(fault_exc)):
+        for j in fault_input[i]:
+            fault_mask[j, fault_exc[i]] = 0
 
 elif FT == "SA1":
-    dead_input = []
+    fault_input = []
     for i in range(FS_exc_num):
-        dead_input.append(random.sample(range(0, num_inputs), FS_input_num))
-    dead_exc = random.sample(range(0, n_neurons), FS_exc_num)
+        fault_input.append(random.sample(range(0, num_inputs), FS_input_num))
+    fault_exc = random.sample(range(0, n_neurons), FS_exc_num)
 
-    dead_mask = torch.zeros_like(torch.zeros((num_inputs, n_neurons)))
-    for i in range(len(dead_exc)):
-        for j in dead_input[i]:
+    fault_mask = torch.zeros_like(torch.zeros((num_inputs, n_neurons)))
+    for i in range(len(fault_exc)):
+        for j in fault_input[i]:
             # dead_mask[j, dead_exc[i]] = rand_gmax[j, dead_exc[i]]
-            dead_mask[j, dead_exc[i]] = num_inputs / 10 * weight_scale
+            fault_mask[j, fault_exc[i]] = num_inputs / 10 * weight_scale
 
 else:
-    dead_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons)))
+    fault_mask = torch.ones_like(torch.zeros((num_inputs, n_neurons)))
 
 # Train the network.
 print("\nBegin training.\n")
@@ -443,9 +444,9 @@ for epoch in range(n_epochs):
         network.run(inputs=inputs, time=time, input_time_dim=1, s_record=s_record, t_record=t_record,
                     simulation_time=time, rand_gmax=rand_gmax, rand_gmin=rand_gmin, random_G=random_G,
                     vLTP=vLTP, vLTD=vLTD, beta=beta, n_neurons=n_neurons, ST=ST, Pruning=Pruning,
-                    drop_mask=drop_mask, reinforce_mask=reinforce_mask,
-                    # reinforce_input=reinforce_input, reinforce_ref=reinforce_ref,
-                    fault_type=FT, dead_mask=dead_mask)
+                    drop_mask=drop_mask,  # reinforce_mask=reinforce_mask,
+                    reinforce_input=reinforce_input, reinforce_ref=reinforce_ref,
+                    fault_type=FT, fault_mask=fault_mask)
 
         # Get voltage recording.
         exc_voltages = exc_voltage_monitor.get("v")
@@ -513,9 +514,9 @@ for step, batch in enumerate(test_data):
     network.run(inputs=inputs, time=time, input_time_dim=1, s_record=s_record, t_record=t_record,
                 simulation_time=time, rand_gmax=rand_gmax, rand_gmin=rand_gmin, random_G=random_G,
                 vLTP=vLTP, vLTD=vLTD, beta=beta, n_neurons=n_neurons, ST=ST, Pruning=Pruning,
-                drop_mask=drop_mask, reinforce_mask=reinforce_mask,
-                # reinforce_input=reinforce_input, reinforce_ref=reinforce_ref,
-                fault_type=FT, dead_mask=dead_mask)
+                drop_mask=drop_mask,  # reinforce_mask=reinforce_mask,
+                reinforce_input=reinforce_input, reinforce_ref=reinforce_ref,
+                fault_type=FT, fault_mask=fault_mask)
 
     # Add to spikes recording.
     spike_record[0] = spikes["Ae"].get("s").squeeze()
