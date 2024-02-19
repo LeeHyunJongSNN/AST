@@ -31,3 +31,6 @@ We implemented two versions of AST.
 One is implemented by using conditions and loops. 
 The other is implementde by using pytorch methods.
 They show the same results but they have slightly different operations.
+
+# Paper
+My paper dealing with AST is under review and it will be available to read on Elsevier Neurocomputing!
