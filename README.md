@@ -33,4 +33,6 @@ The other is implementde by using pytorch methods.
 They show the same results but they have slightly different operations.
 
 # Paper
-My paper dealing with AST is under review and it will be available to read on Elsevier Neurocomputing!
+My paper explaining AST is under review on Wiley Computational Intelligence!
+The preprint is in here.
+https://www.researchgate.net/publication/374136675_Adaptive_synaptic_adjustment_mechanism_to_improve_learning_performances_of_spiking_neural_networks
